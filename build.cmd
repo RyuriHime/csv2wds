@@ -8,7 +8,9 @@ if not exist "%CSC%" (
   exit /b 1
 )
 "%CSC%" /nologo /target:winexe /codepage:65001 /out:"%~dp0WDS转谱器.exe" ^
-        /r:System.Windows.Forms.dll /r:System.Drawing.dll "%~dp0src\ChartForge.cs"
+        /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Net.dll ^
+        "%~dp0src\ChartForge.cs" "%~dp0src\CatalogForm.cs" ^
+        "%~dp0src\ScoreSource.cs" "%~dp0src\Catalog.cs"
 if errorlevel 1 (
   echo 编译失败
   exit /b 1

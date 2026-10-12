@@ -58,6 +58,13 @@ namespace WdsChartForge
         static readonly HashSet<int> StarAliasTypes = new HashSet<int> { 40 };
         static readonly HashSet<int> HoldBodyTypes = new HashSet<int> { 100, 101, 110, 111 };
         static readonly HashSet<int> StarWideOwnerTypes = new HashSet<int> { 110, 111 };
+        // 分裂线:noteType=0 + 下面这些 gimmick 之一 + 第 7 列是 4~6 位编号。
+        // chart 里写成  N <id> <tick> <tick2> 0 0 <场地宽度> <gimmick> <编号> -1
+        // 有些 CSV 没写 lane/宽度(0 或 -1),要在这里补上,否则编辑器
+        // 会把这条分裂线当成无效数据,导出时写不出来。
+        static readonly HashSet<int> SplitGimmicks =
+            new HashSet<int> { 11, 12, 13, 14, 15, 16, 32, 33 };
+        const int FieldWidth = 12;      // WDS 场地宽度(4K / 12K 都是 12 个单位)
 
         public static string Num(double v)
         {
@@ -115,6 +122,7 @@ namespace WdsChartForge
 
             List<Note> notes = new List<Note>();
             int rows = 0, dropped = 0, clamped = 0;
+            int splitFixed = 0;
             double first = double.MaxValue, last = double.MinValue;
 
             for (int i = 0; i < lines.Length; i++)
@@ -146,6 +154,12 @@ namespace WdsChartForge
                 n.Lane = laneIn - 1;
                 if (n.Lane < 0) { n.Lane = 0; clamped++; }
                 n.Width = width;
+                if (noteType == 0 && SplitGimmicks.Contains(gim))
+                {
+                    // 分裂线要横跨整个场地:lane 归 0,宽度没填就补满
+                    n.Lane = 0;
+                    if (n.Width <= 0) { n.Width = FieldWidth; splitFixed++; }
+                }
                 n.Gim = gim;
                 n.Param = par;
                 n.Seq = notes.Count;
@@ -399,6 +413,17 @@ namespace WdsChartForge
             btnClear.Click += delegate { txtLog.Clear(); };
             Controls.Add(btnClear);
 
+            Button btnCatalog = new Button();
+            btnCatalog.Text = "官方曲库转谱...";
+            btnCatalog.Location = new Point(540, 136);
+            btnCatalog.Size = new Size(204, 32);
+            btnCatalog.Click += delegate
+            {
+                using (CatalogForm f = new CatalogForm())
+                    f.ShowDialog(this);
+            };
+            Controls.Add(btnCatalog);
+
             txtLog.Multiline = true;
             txtLog.ReadOnly = true;
             txtLog.ScrollBars = ScrollBars.Vertical;
@@ -546,6 +571,8 @@ namespace WdsChartForge
             string csv = null;
             double bpm = 0;
             bool keep900 = false, quiet = false;
+            bool catalogOnly = false;
+            int fetchSong = 0, fetchDiff = 0;
             string outPath = null;
 
             for (int i = 0; i < args.Length; i++)
@@ -555,7 +582,54 @@ namespace WdsChartForge
                 else if (a == "--out" && i + 1 < args.Length) { outPath = args[++i]; }
                 else if (a == "--keep-900") keep900 = true;
                 else if (a == "--quiet") quiet = true;
+                else if (a == "--catalog") catalogOnly = true;
+                else if (a == "--fetch" && i + 2 < args.Length)
+                {
+                    int.TryParse(args[++i], out fetchSong);
+                    int.TryParse(args[++i], out fetchDiff);
+                }
                 else if (!a.StartsWith("-")) csv = a;
+            }
+
+            // 命令行直接走「官方曲库」:WDS转谱器.exe --fetch <曲目编号> <难度> --out a.wdschart
+            if (fetchSong > 0 && fetchDiff > 0)
+            {
+                StringBuilder log = new StringBuilder();
+                try
+                {
+                    string text = ScoreSource.Download(fetchSong, fetchDiff);
+                    List<double> ts = ScoreSource.CollectTimes(text);
+                    double score;
+                    double useBpm = bpm > 0 ? bpm : ScoreSource.InferBpm(ts, 100.0, 220.0, out score);
+                    log.AppendFormat("曲目 {0} 难度 {1}:{2} 行,{3} 个时间点\r\n",
+                                     fetchSong, fetchDiff, text.Split('\n').Length, ts.Count);
+                    log.AppendFormat("BPM = {0}\r\n", useBpm);
+                    string tmp = Path.Combine(Path.GetTempPath(),
+                                              string.Format("csv2wds_{0}_{1}.csv", fetchSong, fetchDiff));
+                    File.WriteAllText(tmp, text, new UTF8Encoding(false));
+                    if (outPath == null) outPath = string.Format("{0}_{1}.wdschart", fetchSong, fetchDiff);
+                    string clog;
+                    Converter.Convert(tmp, useBpm, 480, 20, keep900, outPath, out clog);
+                    log.Append(clog);
+                    try { File.Delete(tmp); } catch { }
+                    File.WriteAllText(outPath + ".log", log.ToString(), new UTF8Encoding(false));
+                    Environment.Exit(0);
+                }
+                catch (Exception ex)
+                {
+                    log.AppendLine("[失败] " + ex.Message);
+                    try { File.WriteAllText((outPath ?? "fetch") + ".log", log.ToString(), new UTF8Encoding(false)); } catch { }
+                    Environment.Exit(1);
+                }
+                return;
+            }
+
+            if (catalogOnly)
+            {
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                Application.Run(new CatalogForm());
+                return;
             }
 
             if (csv != null && quiet)

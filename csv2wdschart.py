@@ -54,6 +54,15 @@ STAR_ALIAS_TYPES = {40}
 HOLD_BODY_TYPES = {100, 101, 110, 111}
 STAR_OWNER_TYPES_WIDE = {110, 111}      # 落在这些长条里的星星是 31
 
+# 分裂线:noteType=0 + gimmick 是下面这些值之一 + 第 7 列是 4~6 位的编号
+#   (例如 noteType=0, gimmick=14, param=11660)
+#   chart 里写成  N <id> <tick> <tick2> 0 <lane> <width> <gimmick> <编号> -1
+#   它必须横跨整个场地,所以 lane=0、width=场地宽度(见 FIELD_WIDTH)。
+#   有些 CSV 里这两格是空的(0 / -1),需要在这里补上,否则编辑器
+#   会把这条分裂线当成无效数据,导出时写不出来。
+SPLIT_GIMMICKS = {11, 12, 13, 14, 15, 16, 32, 33}
+FIELD_WIDTH = 12                        # WDS 场地宽度(4K / 12K 都是 12 个单位)
+
 # CONCURRENT(C 行)的生成规则 —— 从 3 个真实谱面(共 2054 条 C 行)反推,
 # 100% 复现。C 行格式: C <毫秒> <左端 lane> <线宽>
 #   左端 = 该时刻参与音符里最小的 lane
@@ -197,6 +206,7 @@ def build_notes(rows, snap, keep_900=False, warn=None):
     dropped = collections.Counter()
     clamped = 0
     stars = 0
+    split_fixed = 0
     star_alias = 0
     star_orphan = 0
     for lineno, parts in rows:
@@ -220,6 +230,12 @@ def build_notes(rows, snap, keep_900=False, warn=None):
             # 只出现在 noteType=0 / 分裂线这类特殊数据里,按 0 处理。
             lane = 0
             clamped += 1
+        if note_type == 0 and gimmick in SPLIT_GIMMICKS:
+            # 分裂线要横跨整个场地:lane 归 0,宽度没填就补满
+            lane = 0
+            if width <= 0:
+                width = FIELD_WIDTH
+                split_fixed += 1
         notes.append(Note(tick, tick_end, note_type, lane, width, gimmick, param, lineno))
     if warn is not None and clamped:
         warn(clamped)
@@ -246,7 +262,7 @@ def build_notes(rows, snap, keep_900=False, warn=None):
         n.owner_id = owner.note_id
         stars += 1
     stats = {"stars": stars, "star_alias": star_alias, "star_orphan": star_orphan,
-             "clamped": clamped}
+             "clamped": clamped, "split_fixed": split_fixed}
     return notes, dropped, stats
 
 
@@ -415,6 +431,9 @@ def main(argv=None):
             print("       长条星星: %d 条%s" % (stats["stars"], extra))
         if stats["star_orphan"]:
             print("       注意   : %d 条星星找不到所属长条,已降级为普通键" % stats["star_orphan"])
+        if stats.get("split_fixed"):
+            print("       分裂线 : %d 条 CSV 里没写宽度,已按整场宽 %d 补上"
+                  % (stats["split_fixed"], FIELD_WIDTH))
         for m in warn_msgs:
             print("       提示   : %s" % m)
         print("       并发线 : %d 条" % len(conc))
